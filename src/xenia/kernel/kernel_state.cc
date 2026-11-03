@@ -76,6 +76,7 @@ KernelState::KernelState(Emulator* emulator)
   // language.
   xconfig_ = std::make_unique<XConfig>();
   xam_state_ = std::make_unique<xam::XamState>(emulator, this);
+  xbl_api_ = std::make_unique<XLiveAPI>();
   guest_scheduler_ = std::make_unique<GuestScheduler>(this);
   smc_ = std::make_unique<SystemManagementController>();
   nui_ = std::make_unique<NUIController>();

@@ -22,6 +22,7 @@
 #include "xenia/base/bit_map.h"
 #include "xenia/cpu/backend/backend.h"
 #include "xenia/cpu/export_resolver.h"
+#include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel.h"
 #include "xenia/kernel/nui.h"
@@ -194,6 +195,8 @@ class KernelState {
       object_ref<UserModule> exec_module) const;
 
   xam::XamState* xam_state() const { return xam_state_.get(); }
+
+  XLiveAPI* GetXboxLiveAPI() const { return xbl_api_.get(); }
 
   GuestScheduler* guest_scheduler() const { return guest_scheduler_.get(); }
 
@@ -424,6 +427,7 @@ class KernelState {
   cpu::Processor* processor_;
   vfs::VirtualFileSystem* file_system_;
   std::unique_ptr<xam::XamState> xam_state_;
+  std::unique_ptr<XLiveAPI> xbl_api_;
   std::unique_ptr<GuestScheduler> guest_scheduler_;
   // Pooled completion events for RunBlockingIo so a request creates no kernel
   // object.

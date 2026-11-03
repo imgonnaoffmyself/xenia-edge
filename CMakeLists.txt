@@ -76,6 +76,7 @@ endif()
 message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_TARGET_X86_64=${XE_TARGET_X86_64} (${_xe_arch_source})")
 
 option(XENIA_BUILD_TESTS "Build test suites" OFF)
+option(XENIA_XBL_ONLINE "Enable xenia-webservices online play support" ON)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
 option(XENIA_ENABLE_LTO "Enable link-time optimization in Release (slow link)" ON)
 option(XENIA_ENABLE_PROFILER "Enable profiler (UI is Debug-only)" OFF)

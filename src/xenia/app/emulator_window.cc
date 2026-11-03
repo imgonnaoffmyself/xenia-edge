@@ -35,6 +35,7 @@
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
+#include "xenia/app/netplay_settings_dialog.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -1104,6 +1105,10 @@ bool EmulatorWindow::Initialize() {
     config_menu->AddChild(
         WxMenuItem::Create(MenuItem::Type::kString, _("&Main"), "",
                            [this]() { ShowQuickSettings(); }));
+    config_menu->AddChild(WxMenuItem::Create(
+        MenuItem::Type::kString, _("&Netplay Settings..."), "",
+        [this]() {
+      ToggleNetplaySettingsDialog(); })));
     config_menu->AddChild(WxMenuItem::Create(MenuItem::Type::kSeparator));
     if (cvar::ConfigVars) {
       std::set<std::string> categories;
@@ -3152,6 +3157,16 @@ void EmulatorWindow::ToggleAudioDialog() {
   });
   // The dialog draws on the UI thread, so refresh the icon directly (live).
   audio_dialog_->SetOnChangeCallback([this]() { RefreshAudioIcon(); });
+}
+
+void EmulatorWindow::ToggleNetplaySettingsDialog() {
+  if (netplay_settings_dialog_) {
+    netplay_settings_dialog_->Close();
+    netplay_settings_dialog_ = nullptr;
+    return;
+  }
+
+  netplay_settings_dialog_ = new NetplaySettingsDialog(imgui_drawer());
 }
 
 void EmulatorWindow::ToggleMute() {

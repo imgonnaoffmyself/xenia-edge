@@ -15,6 +15,7 @@ endif()
 
 target_sources(xenia-app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/xenia_main.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/netplay_settings_dialog.cc
 )
 
 xe_platform_sources(xenia-app ${CMAKE_CURRENT_SOURCE_DIR})
