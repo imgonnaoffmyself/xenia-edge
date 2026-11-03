@@ -13,6 +13,7 @@ if(XE_TARGET_X86_64)
     X86_AVX512VNNI
     X86_PCLMULQDQ_CRC
     X86_VPCLMULQDQ_CRC
+    CURL_STATICLIB
     _WINSOCK_DEPRECATED_NO_WARNINGS
   )
 endif()
@@ -22,6 +23,16 @@ target_link_libraries(xenia-kernel PUBLIC
 )
 if(WIN32)
   target_link_libraries(xenia-kernel PUBLIC winhttp)
+endif()
+
+if(XENIA_XBL_ONLINE)
+  target_compile_definitions(xenia-kernel PRIVATE XENIA_XBL_ONLINE)
+  target_link_libraries(xenia-kernel PUBLIC
+    libcurl miniupnpc::miniupnpc
+  )
+  if(LINUX)
+    target_link_libraries(xenia-kernel PRIVATE cacert)
+  endif()
 endif()
 xe_target_defaults(xenia-kernel)
 

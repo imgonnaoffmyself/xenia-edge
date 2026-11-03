@@ -91,6 +91,9 @@ class XSession : public XObject {
   // Fills XSESSION_LOCAL_DETAILS and as many members as fit in the buffer.
   X_RESULT GetDetails(uint32_t size_ptr, uint32_t details_ptr);
 
+  // Returns the session key ID (XNKID), useful for web service lookups.
+  net::KeyId session_id() const { return info_.session_id; }
+
  private:
   enum State : uint32_t {
     kLobby = 0,

@@ -256,6 +256,7 @@ class EmulatorWindow {
   ui::ImGuiDebugDialog* debug_dialog_ = nullptr;
   ProfileConfigDialog* profile_dialog_ = nullptr;
   ui::ImGuiAudioDialog* audio_dialog_ = nullptr;
+  ui::ImGuiDialog* netplay_settings_dialog_ = nullptr;
   ui::ImGuiContextMenu* context_menu_ = nullptr;
   std::unordered_set<ui::VirtualKey> hotkeys_down_;
 

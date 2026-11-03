@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - name: Setup
         run: |
           pipx install clang-format==21.1.8
@@ -29,6 +31,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Cache linuxdeploy tools
         id: cache-linuxdeploy
@@ -202,6 +205,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Cache Slang
         id: cache-slang
@@ -333,7 +337,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          submodules: false
+          submodules: recursive
 
       - name: Cache Slang
         id: cache-slang

@@ -47,6 +47,10 @@
 #include <sys/socket.h>
 #endif
 
+#include <map>
+#include <optional>
+#include <utility>
+
 namespace xe {
 namespace kernel {
 namespace xam {
@@ -612,11 +616,19 @@ dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
            XnAddrStatus::XNET_GET_XNADDR_STATIC;
   }
 
-  // Just return a loopback address atm.
-  addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
-  addr_ptr->inaOnline.s_addr = 0;
-  addr_ptr->wPortOnline = 0;
-
+  // When in XboxLive (webservices) mode, report the console as online so
+  // titles can resolve peers and sessions through the web service endpoint.
+  uint32_t xnaddr_flags = XnAddrStatus::XNET_GET_XNADDR_STATIC;
+  if (cvars::network_mode == 2) {  // NETWORK_MODE::XBOXLIVE
+    addr_ptr->inaOnline.s_addr = htonl(INADDR_LOOPBACK);
+    addr_ptr->wPortOnline = 0;
+    xnaddr_flags |= XnAddrStatus::XNET_GET_XNADDR_ONLINE;
+  } else {
+    // Just return a loopback address atm.
+    addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
+    addr_ptr->inaOnline.s_addr = 0;
+    addr_ptr->wPortOnline = 0;
+  }
   // TODO(gibbed): A proper mac address.
   // RakNet's 360 version appears to depend on abEnet to create "random" 64-bit
   // numbers. A zero value will cause RakPeer::Startup to fail. This causes
@@ -629,10 +641,9 @@ dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
   // "Mac address is a poor solution because you can't have multiple connections
   // from the same system"
   std::memset(addr_ptr->abEnet, 0xCC, 6);
-
   std::memset(addr_ptr->abOnline, 0, 20);
 
-  return XnAddrStatus::XNET_GET_XNADDR_STATIC;
+  return xnaddr_flags;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetTitleXnAddr, kNetworking, kImplemented);
 
@@ -712,6 +723,55 @@ DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToInAddr, kNetworking, kImplemented);
 dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, dword_t in_addr,
                                                pointer_t<XNADDR> xn_addr,
                                                lpvoid_t xid) {
+  // When in XboxLive (webservices) mode, look up the player's MAC address via
+  // the xenia-webservices /players/find endpoint before falling back to the
+  // system link reverse lookup.
+  if (cvars::network_mode == 2) {
+    auto* xbl_api = kernel_state()->GetXboxLiveAPI();
+    // Format IP from in_addr (network byte order).
+    uint8_t ip_bytes[4] = {
+        static_cast<uint8_t>((in_addr >> 24) & 0xFF),
+        static_cast<uint8_t>((in_addr >> 16) & 0xFF),
+        static_cast<uint8_t>((in_addr >> 8) & 0xFF),
+        static_cast<uint8_t>(in_addr & 0xFF),
+    };
+    std::string ip_str =
+        std::to_string(ip_bytes[0]) + "." + std::to_string(ip_bytes[1]) + "." +
+        std::to_string(ip_bytes[2]) + "." + std::to_string(ip_bytes[3]);
+
+    response_data player_data = xbl_api->FindPlayer(ip_str);
+    if (player_data.response && player_data.size > 0) {
+      std::string body(player_data.response, player_data.size);
+      free(player_data.response);
+      // Minimal MAC address extraction: look for "mac":"XX:XX:XX:XX:XX:XX"
+      // or "macAddress":"XX:XX:XX:XX:XX:XX" in the JSON response.
+      size_t mac_pos = body.find("mac");
+      if (mac_pos != std::string::npos) {
+        size_t colon = body.find(':', mac_pos);
+        size_t quote = body.find('"', colon + 1);
+        size_t end_quote = body.find('"', quote + 1);
+        if (quote != std::string::npos && end_quote != std::string::npos) {
+          std::string mac_str = body.substr(quote + 1, end_quote - quote - 1);
+          if (mac_str.size() == 17) {  // XX:XX:XX:XX:XX:XX
+            MacAddress mac(mac_str);
+            if (xn_addr) {
+              std::memset(xn_addr, 0, sizeof(*xn_addr));
+              xn_addr->inaOnline.s_addr = in_addr;
+              xn_addr->wPortOnline = xbl_api->GetPlayerPort();
+              std::memcpy(xn_addr->abEnet, mac.raw(),
+                          MacAddress::MacAddressSize);
+              xn_addr->abOnline[0] = 0x01;  // Xbox 360 platform type
+            }
+            if (xid) {
+              std::memset(xid, 0, 8);
+            }
+            return 0;
+          }
+        }
+      }
+    }
+  }
+
   auto link = GetSystemLink(kernel_state());
   if (!link) {
     return 1;
@@ -2014,6 +2074,60 @@ dword_result_t NetDll_XHttpCrackUrl_entry(dword_t caller, lpvoid_t url_ptr,
   return 1;
 }
 DECLARE_XAM_EXPORT1(NetDll_XHttpCrackUrl, kNetworking, kImplemented);
+
+#ifdef XENIA_XBL_ONLINE
+// Resolves a Xenia Web Services endpoint for the given service name. This is
+// the client-side half of the xenia-webservices online play support: titles
+// resolve service names (e.g. session/presence/title storage endpoints) to
+// absolute web service URLs before issuing XHttp requests to them.
+dword_result_t XamGetServiceEndpoint_entry(
+    lpstring_t service_name_ptr, lpstring_t service_endpoint_ptr,
+    dword_t service_endpoint_len, pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
+  if (!service_name_ptr || !service_endpoint_ptr || !service_endpoint_len) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+
+  const std::string service_name = service_name_ptr.value();
+  std::string service_endpoint = fmt::format(
+      "{}{}", kernel_state()->GetXboxLiveAPI()->GetApiAddress(), service_name);
+
+  // Normalize the endpoint so URL cracking always sees a scheme.
+  CURLU* url = curl_url();
+  CURLUcode rc = curl_url_set(url, CURLUPART_URL, service_endpoint.c_str(), 0);
+  if (rc == CURLUE_BAD_SCHEME) {
+    service_endpoint = fmt::format("http://{}", service_endpoint);
+  }
+  curl_url_cleanup(url);
+
+  auto run = [=](uint32_t& extended_error, uint32_t& length) {
+    extended_error = X_ERROR_SUCCESS;
+    length = 0;
+
+    std::memset(service_endpoint_ptr, 0, service_endpoint_len);
+
+    if (service_endpoint_len < service_endpoint.size() + 1) {
+      extended_error = X_ERROR_INSUFFICIENT_BUFFER;
+      return X_ERROR_FUNCTION_FAILED;
+    }
+    xe::string_util::copy_truncating(
+        service_endpoint_ptr, service_endpoint.c_str(), service_endpoint_len);
+    XELOGI("XamGetServiceEndpoint: {}", service_endpoint.c_str());
+
+    return X_ERROR_SUCCESS;
+  };
+
+  if (!overlapped_ptr) {
+    uint32_t extended_error = 0;
+    uint32_t length = 0;
+    X_RESULT result = run(extended_error, length);
+    return result == X_ERROR_SUCCESS ? result : extended_error;
+  }
+
+  kernel_state()->CompleteOverlappedDeferredEx(run, overlapped_ptr);
+  return X_ERROR_IO_PENDING;
+}
+DECLARE_XAM_EXPORT1(XamGetServiceEndpoint, kNetworking, kSketchy);
+#endif  // XENIA_XBL_ONLINE
 
 }  // namespace xam
 }  // namespace kernel

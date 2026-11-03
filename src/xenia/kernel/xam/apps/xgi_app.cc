@@ -8,6 +8,7 @@
  */
 
 #include "xenia/kernel/xam/apps/xgi_app.h"
+#include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/title_id_utils.h"
 #include "xenia/kernel/xam/user_settings.h"
 #include "xenia/kernel/xam/xam_state.h"
@@ -15,7 +16,10 @@
 #include "xenia/kernel/xconfig.h"
 #include "xenia/kernel/xsession.h"
 
+#include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+
+DECLARE_int32(network_mode);
 #include "xenia/base/string.h"
 #include "xenia/base/string_util.h"
 
@@ -367,8 +371,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       if (!session) {
         return X_E_INVALIDARG;
       }
-      return session->Create(flags, user_index, num_slots_public,
-                             num_slots_private, session_info_ptr, nonce_ptr);
+      auto result =
+          session->Create(flags, user_index, num_slots_public,
+                          num_slots_private, session_info_ptr, nonce_ptr);
+      if (result == X_ERROR_SUCCESS && cvars::network_mode == 2 &&
+          session_info_ptr) {
+        // Register the session on the xenia-webservices backend.
+        auto info = kernel_state_->memory()->TranslateVirtual<XSESSION_INFO*>(
+            session_info_ptr);
+        if (info) {
+          const net::KeyId& key_id = info->session_id;
+          uint64_t session_id = 0;
+          memcpy(&session_id, key_id.data(), sizeof(session_id));
+          session_id = xe::byte_swap(session_id);
+
+          std::string json = "{\"sessionid\":\"";
+          char id_buf[17];
+          snprintf(id_buf, sizeof(id_buf), "%016llx",
+                   static_cast<unsigned long long>(session_id));
+          json += id_buf;
+          json += "\",\"flags\":" + std::to_string(flags) +
+                  ",\"publicSlots\":" + std::to_string(num_slots_public) +
+                  ",\"privateSlots\":" + std::to_string(num_slots_private) +
+                  "}";
+
+          kernel_state_->GetXboxLiveAPI()->XSessionCreate(session_id, json);
+        }
+      }
+      return result;
     }
     case 0x000B0011: {
       XELOGD("XGISessionDelete({:08X}, {:08X})", buffer_ptr, buffer_length);
@@ -376,6 +406,13 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                                          xe::load_and_swap<uint32_t>(buffer));
       if (!session) {
         return X_E_INVALIDARG;
+      }
+      if (cvars::network_mode == 2) {
+        const net::KeyId& key_id = session->session_id();
+        uint64_t session_id = 0;
+        memcpy(&session_id, key_id.data(), sizeof(session_id));
+        session_id = xe::byte_swap(session_id);
+        kernel_state_->GetXboxLiveAPI()->DeleteSession(session_id);
       }
       return session->DeleteSession();
     }
