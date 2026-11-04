@@ -29,8 +29,19 @@ class NetplaySettingsDialog final : public ui::ImGuiDialog {
 
  private:
   char api_address_buf_[256] = {};
+  char api_list_buf_[256] = {};
+  char friends_xuids_buf_[256] = {};
+  char network_interface_buf_[64] = {};
+  char upnp_root_buf_[256] = {};
   int selected_network_mode_ = 0;  // 0 = Offline, 1 = Systemlink, 2 = XboxLive
+  int discord_presence_user_index_ = 0;
   bool xhttp_ = false;
+  bool bind_interface_ = false;
+  bool stub_xlivebase_ = true;
+  bool upnp_ = true;
+  bool log_mask_ips_ = true;
+  bool xstorage_backend_ = false;
+  bool xstorage_user_data_backend_ = false;
   bool initialized_ = false;
 };
 
