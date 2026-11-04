@@ -234,6 +234,9 @@ class XSession : public XObject {
     return live_properties_;
   };
 
+  // Returns the session key ID (XNKID), useful for web service lookups.
+  net::KeyId session_id() const { return info_.session_id; }
+
  private:
   void PrintSessionDetails();
   void PrintSessionType(SessionFlags flags);
