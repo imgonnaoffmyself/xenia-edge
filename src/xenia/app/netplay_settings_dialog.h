@@ -48,6 +48,7 @@ class NetplaySettingsDialog final : public ui::ImGuiDialog {
   std::string find_player_result_;
   std::string session_list_result_;
   std::string session_details_result_;
+  std::string join_session_result_;
   std::string delete_session_result_;
 };
 

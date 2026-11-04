@@ -1,5 +1,6 @@
 #include "xenia/app/netplay_settings_dialog.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -355,6 +356,60 @@ void NetplaySettingsDialog::OnDraw(ImGuiIO& io) {
   }
   if (!session_details_result_.empty()) {
     ImGui::TextWrapped("Details: %s", session_details_result_.c_str());
+  }
+
+  // Join Session - ties Browse + Details + Find Player together
+  ImGui::Spacing();
+  ImGui::Text("Join Session");
+  static char join_session_id_buf[32] = {};
+  ImGui::SetNextItemWidth(200.0f);
+  ImGui::InputText("##join_session_id", join_session_id_buf,
+                   IM_ARRAYSIZE(join_session_id_buf));
+  ImGui::SameLine();
+  if (ImGui::Button("Join Session")) {
+    if (xbl_api && strlen(join_session_id_buf) > 0) {
+      uint64_t session_id = 0;
+      bool session_id_valid = true;
+      try {
+        session_id = std::stoull(join_session_id_buf);
+      } catch (...) {
+        join_session_result_ = "Invalid session ID.";
+        session_id_valid = false;
+      }
+      if (session_id_valid) {
+        // Get session details from the web service
+        auto result = xbl_api->SessionDetails(session_id);
+        join_session_result_.clear();
+        if (result.response && result.size > 0) {
+          std::string details(result.response, result.size);
+          free(result.response);
+
+          // Extract the session host IP from details for joining.
+          std::string session_ip;
+          if (JsonGetString(details, "ip", &session_ip) && !session_ip.empty()) {
+            join_session_result_ =
+                "Session found at " + session_ip +
+                ". Use Find Player above to resolve MAC address.";
+            // Also try to find the player at that IP for MAC resolution.
+            auto player_result = xbl_api->FindPlayer(session_ip);
+            if (player_result.response && player_result.size > 0) {
+              join_session_result_ += "\nPlayer: " +
+                  std::string(player_result.response, player_result.size);
+              free(player_result.response);
+            }
+          } else {
+            join_session_result_ =
+                "Session found but no host IP available.";
+          }
+        } else {
+          join_session_result_ = "Session not found or request failed.";
+          free(result.response);
+        }
+      }
+    }
+  }
+  if (!join_session_result_.empty()) {
+    ImGui::TextWrapped("%s", join_session_result_.c_str());
   }
 
   // Delete Session
