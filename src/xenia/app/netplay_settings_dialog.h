@@ -4,6 +4,7 @@
 #include <string>
 
 #include "xenia/ui/imgui_dialog.h"
+#include "xenia/ui/imgui_drawer.h"
 
 namespace xe {
 namespace app {

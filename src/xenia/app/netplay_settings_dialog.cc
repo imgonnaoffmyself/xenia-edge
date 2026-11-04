@@ -8,6 +8,7 @@
 #include "xenia/base/string_util.h"
 #include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/util/shim_utils.h"
 
 DECLARE_string(api_address);
 
