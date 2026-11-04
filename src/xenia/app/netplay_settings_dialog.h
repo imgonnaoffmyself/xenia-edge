@@ -7,6 +7,13 @@
 #include "xenia/ui/imgui_drawer.h"
 
 namespace xe {
+namespace ui {
+
+// Forward declaration in case imgui_drawer.h hasn't been fully processed yet.
+class ImGuiDrawer;
+
+}  // namespace ui
+
 namespace app {
 
 // User-visible configuration dialog for xenia-webservices online play. Lets the
@@ -14,7 +21,7 @@ namespace app {
 // stack. Backed by cvars so values persist in the emulator config.
 class NetplaySettingsDialog final : public ui::ImGuiDialog {
  public:
-  explicit NetplaySettingsDialog(ImGuiDrawer* imgui_drawer)
+  explicit NetplaySettingsDialog(ui::ImGuiDrawer* imgui_drawer)
       : ui::ImGuiDialog(imgui_drawer) {}
 
  protected:

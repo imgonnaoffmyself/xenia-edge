@@ -41,7 +41,7 @@ void NetplaySettingsDialog::OnDraw(ImGuiIO& io) {
     initialized_ = true;
   }
 
-  auto* xbl_api = kernel_state()->GetXboxLiveAPI();
+  auto* xbl_api = xe::kernel::kernel_state()->GetXboxLiveAPI();
 
   ImGui::Text("Xenia Web Services (Online Play)");
   ImGui::Separator();
