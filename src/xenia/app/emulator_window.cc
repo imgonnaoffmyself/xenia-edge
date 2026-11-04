@@ -1108,7 +1108,7 @@ bool EmulatorWindow::Initialize() {
     config_menu->AddChild(WxMenuItem::Create(
         MenuItem::Type::kString, _("&Netplay Settings..."), "",
         [this]() {
-      ToggleNetplaySettingsDialog(); })));
+      ToggleNetplaySettingsDialog(); }));
     config_menu->AddChild(WxMenuItem::Create(MenuItem::Type::kSeparator));
     if (cvar::ConfigVars) {
       std::set<std::string> categories;
@@ -3161,7 +3161,7 @@ void EmulatorWindow::ToggleAudioDialog() {
 
 void EmulatorWindow::ToggleNetplaySettingsDialog() {
   if (netplay_settings_dialog_) {
-    netplay_settings_dialog_->Close();
+    netplay_settings_dialog_->Destroy();
     netplay_settings_dialog_ = nullptr;
     return;
   }
