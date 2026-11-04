@@ -22,6 +22,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// winsock2.h must be included before windows.h to avoid conflicts with the
+// legacy winsock.h that windows.h would otherwise pull in. Needed by
+// libcurl/XLiveAPI via WS2tcpip.h.
+#include <winsock2.h>  // NOLINT(build/include_order)
 #include <ObjBase.h>
 #include <SDKDDKVer.h>
 #include <bcrypt.h>
