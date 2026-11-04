@@ -41,8 +41,6 @@ MacAddress::MacAddress(uint64_t macaddress) {
 
 MacAddress::~MacAddress() {}
 
-const uint8_t* MacAddress::raw() const { return mac_address_; }
-
 std::vector<uint8_t> MacAddress::to_array() const {
   std::vector<uint8_t> result = {};
   result.resize(MacAddressSize);
