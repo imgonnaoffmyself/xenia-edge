@@ -20,8 +20,10 @@
 
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
+#include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/util/net_utils.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_private.h"
@@ -34,12 +36,17 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
+DECLARE_int32(network_mode);
+
 #ifdef XE_PLATFORM_WIN32
 // NOTE: must be included last as it expects windows.h to already be included.
 #ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
 #endif
 #include <winsock2.h>  // NOLINT(build/include_order)
+#ifdef XENIA_XBL_ONLINE
+#include "third_party/libcurl/include/curl/curl.h"  // NOLINT(build/include_order)
+#endif
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
