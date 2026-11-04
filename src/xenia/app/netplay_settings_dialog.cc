@@ -1,5 +1,6 @@
 #include "xenia/app/netplay_settings_dialog.h"
 
+#include <cstring>
 #include <string>
 
 #include "third_party/imgui/imgui.h"
@@ -333,21 +334,23 @@ void NetplaySettingsDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Button("Get Details")) {
     if (xbl_api && strlen(session_id_buf) > 0) {
       uint64_t session_id = 0;
+      bool session_id_valid = true;
       try {
         session_id = std::stoull(session_id_buf);
       } catch (...) {
         session_details_result_ = "Invalid session ID.";
-        goto skip_details;
+        session_id_valid = false;
       }
-      auto result = xbl_api->SessionDetails(session_id);
-      session_details_result_.clear();
-      if (result.response && result.size > 0) {
-        session_details_result_.assign(result.response, result.size);
-      } else {
-        session_details_result_ = "Session not found or request failed.";
+      if (session_id_valid) {
+        auto result = xbl_api->SessionDetails(session_id);
+        session_details_result_.clear();
+        if (result.response && result.size > 0) {
+          session_details_result_.assign(result.response, result.size);
+        } else {
+          session_details_result_ = "Session not found or request failed.";
+        }
+        free(result.response);
       }
-      free(result.response);
-    skip_details:;
     }
   }
   if (!session_details_result_.empty()) {
@@ -364,16 +367,18 @@ void NetplaySettingsDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Button("Delete Session")) {
     if (xbl_api && strlen(delete_session_id_buf) > 0) {
       uint64_t session_id = 0;
+      bool session_id_valid = true;
       try {
         session_id = std::stoull(delete_session_id_buf);
       } catch (...) {
         delete_session_result_ = "Invalid session ID.";
-        goto skip_delete;
+        session_id_valid = false;
       }
-      bool ok = xbl_api->DeleteSession(session_id);
-      delete_session_result_ =
-          ok ? "Session deleted successfully." : "Failed to delete session.";
-    skip_delete:;
+      if (session_id_valid) {
+        bool ok = xbl_api->DeleteSession(session_id);
+        delete_session_result_ =
+            ok ? "Session deleted successfully." : "Failed to delete session.";
+      }
     }
   }
   if (!delete_session_result_.empty()) {
