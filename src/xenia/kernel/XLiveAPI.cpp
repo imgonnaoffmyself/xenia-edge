@@ -36,6 +36,14 @@ DEFINE_int32(network_mode, 0,
 DEFINE_bool(bind_interface, false,
             "Useful for network Tunnels/VPNs e.g. XLink Kai.", "Live");
 DEFINE_bool(xhttp, false, "Toggles XHTTP.", "Live");
+DEFINE_bool(stub_xlivebase, true, "Return success for all unimplemented XLiveBase calls.", "Live");
+DEFINE_bool(upnp, true, "Automatically port forward using UPnP", "Live");
+DEFINE_string(upnp_root, "", "UPnP Root Device", "Live");
+DEFINE_int32(discord_presence_user_index, 0, "User profile index used for Discord rich presence [0, 3].", "Live");
+DEFINE_string(friends_xuids, "", "Comma delimited list of XUIDs. (Max 100)", "Live");
+DEFINE_string(network_interface, "", "Network Interface Identifier", "Live");
+DEFINE_bool(xstorage_backend, false, "Request XStorage content from backend and fallback locally", "Live");
+DEFINE_bool(xstorage_user_data_backend, false, "Store user data on backend (not recommended), otherwise fallback locally", "Live");
 
 namespace xe {
 namespace kernel {

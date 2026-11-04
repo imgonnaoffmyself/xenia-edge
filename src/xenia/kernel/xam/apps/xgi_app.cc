@@ -393,7 +393,8 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
           json += "\",\"flags\":" + std::to_string(flags) +
                   ",\"publicSlots\":" + std::to_string(num_slots_public) +
                   ",\"privateSlots\":" + std::to_string(num_slots_private) +
-                  "}";
+                  ",\"ip\":\"" +
+                  kernel_state_->GetXboxLiveAPI()->OnlineIP_str() + "\"}";
 
           kernel_state_->GetXboxLiveAPI()->XSessionCreate(session_id, json);
         }
