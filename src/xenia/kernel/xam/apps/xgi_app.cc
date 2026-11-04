@@ -8,16 +8,15 @@
  */
 
 #include "xenia/kernel/xam/apps/xgi_app.h"
-#include "xenia/kernel/title_id_utils.h"
-#include "xenia/kernel/xam/user_settings.h"
-#include "xenia/kernel/xam/xam_state.h"
-#include "xenia/kernel/xam/xdbf/spa_info.h"
-#include "xenia/kernel/xconfig.h"
+#include "xenia/base/logging.h"
+#include "xenia/emulator.h"
+#include "xenia/kernel/XLiveAPI.h"
+#include "xenia/kernel/json/read_user_stats_object_json.h"
+#include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xsession.h"
 
-#include "xenia/base/logging.h"
-#include "xenia/base/string.h"
-#include "xenia/base/string_util.h"
+using namespace rapidjson;
+using namespace xe::string_util;
 
 namespace xe {
 namespace kernel {
@@ -85,162 +84,217 @@ struct XGI_XUSER_SET_PROPERTY {
 };
 static_assert_size(XGI_XUSER_SET_PROPERTY, 0x20);
 
-struct XUSER_STATS_VIEW {
-  xe::be<uint32_t> ViewId;
-  xe::be<uint32_t> TotalViewRows;
-  xe::be<uint32_t> NumRows;
-  xe::be<uint32_t> pRows;
+// ANID = Anonymous user id
+struct XGI_XUSER_ANID {
+  xe::be<uint32_t> user_index;
+  xe::be<uint32_t> AnId_buffer_size;
+  xe::be<uint32_t> AnId_buffer_ptr;  // char*
+  xe::be<uint32_t> block;            // 1
 };
+static_assert_size(XGI_XUSER_ANID, 0x10);
 
-struct XUSER_STATS_COLUMN {
-  xe::be<uint16_t> ColumnId;
-  X_USER_DATA Value;
-};
-
-struct XUSER_STATS_RESET {
+struct XGI_XUSER_STATS_RESET {
   xe::be<uint32_t> user_index;
   xe::be<uint32_t> view_id;
 };
+static_assert_size(XGI_XUSER_STATS_RESET, 0x8);
 
-struct XUSER_ANID {
-  xe::be<uint32_t> user_index;
-  xe::be<uint32_t> cchAnIdBuffer;
-  xe::be<uint32_t> pszAnIdBuffer;
-  xe::be<uint32_t> value_const;  // 1
-};
+static object_ref<XSession> LookupSessionObject(Memory* memory,
+                                                uint32_t obj_ptr) {
+  if (!obj_ptr) {
+    return nullptr;
+  }
 
-// The 17559 dashboard reads the game in the drive from the SPA in its
-// executable.
-struct XGI_TITLE_INFO_FROM_SPA {
-  xe::be<uint32_t> spa_address;
-  xe::be<uint32_t> spa_size;
-  xe::be<uint32_t> name_length;  // In characters.
-  xe::be<uint32_t> name_address;
-  // The icon buffer's size going in and the icon's coming out.
-  xe::be<uint32_t> icon_size_address;
-  xe::be<uint32_t> icon_address;
-};
-static_assert_size(XGI_TITLE_INFO_FROM_SPA, 0x18);
-
-// XamUserReadUserPreference and XamUserWriteUserPreference send this, with
-// the value's address for a read and the value for a write.
-struct XGI_USER_PREFERENCE {
-  xe::be<uint32_t> user_index;
-  xe::be<uint32_t> preference;
-  xe::be<uint32_t> value;
-};
-static_assert_size(XGI_USER_PREFERENCE, 0xC);
-
-// The console keeps user preferences as bits of one of the dashboard's
-// profile settings, read and written by mask. Masks 6 and 0x18 have a bit of
-// their own that a write sets, and a read of one never written returns 1.
-constexpr uint32_t kUserPreferencesSettingId = 0x10040053;
-
-static bool IsUserPreference(uint32_t preference) {
-  switch (preference) {
-    case 0x1:
-    case 0x6:
-    case 0x18:
-    case 0x20:
-    case 0x40:
-    case 0x80:
-    case 0x100:
-    case 0x200:
-      return true;
-  }
-  return false;
-}
-
-static uint32_t UserPreferenceWrittenBit(uint32_t preference) {
-  switch (preference) {
-    case 0x6:
-      return 0x4;
-    case 0x18:
-      return 0x10;
-  }
-  return 0;
-}
-
-static X_HRESULT ReadUserPreferences(KernelState* kernel_state,
-                                     uint32_t user_index, uint32_t& bits) {
-  if (user_index >= XUserMaxUserCount) {
-    return X_E_INVALIDARG;
-  }
-  const auto user = kernel_state->xam_state()->GetUserProfile(user_index);
-  if (!user) {
-    return X_E_NO_SUCH_USER;
-  }
-  bits = 0;
-  if (const auto setting =
-          kernel_state->xam_state()->user_tracker()->GetSetting(
-              user, kDashboardID, kUserPreferencesSettingId)) {
-    bits = static_cast<uint32_t>(std::get<int32_t>(setting->get_host_data()));
-  }
-  return X_E_SUCCESS;
-}
-
-X_HRESULT XgiApp::ReadUserPreference(uint32_t user_index, uint32_t preference,
-                                     uint32_t& value) {
-  if (!IsUserPreference(preference)) {
-    return X_E_INVALIDARG;
-  }
-  uint32_t bits = 0;
-  if (const X_HRESULT result =
-          ReadUserPreferences(kernel_state_, user_index, bits);
-      XFAILED(result)) {
-    return result;
-  }
-  value = bits & preference;
-  const uint32_t written_bit = UserPreferenceWrittenBit(preference);
-  if (!written_bit) {
-    return X_E_SUCCESS;
-  }
-  if (!(value & written_bit)) {
-    return 1;
-  }
-  value &= ~written_bit;
-  return X_E_SUCCESS;
-}
-
-X_HRESULT XgiApp::WriteUserPreference(uint32_t user_index, uint32_t preference,
-                                      uint32_t value) {
-  const uint32_t written_bit = UserPreferenceWrittenBit(preference);
-  if (user_index >= XUserMaxUserCount || !IsUserPreference(preference) ||
-      (value | preference) != preference || (value & written_bit)) {
-    return X_E_INVALIDARG;
-  }
-  uint32_t bits = 0;
-  if (const X_HRESULT result =
-          ReadUserPreferences(kernel_state_, user_index, bits);
-      XFAILED(result)) {
-    return result;
-  }
-  bits = (bits & ~preference) | value | written_bit;
-  const auto user = kernel_state_->xam_state()->GetUserProfile(user_index);
-  const UserSetting setting(
-      static_cast<UserSettingId>(kUserPreferencesSettingId),
-      static_cast<int32_t>(bits));
-  kernel_state_->xam_state()->user_tracker()->UpsertSetting(
-      user->xuid(), kDashboardID, &setting);
-  kernel_state_->BroadcastNotification(
-      kXNotificationSystemProfileSettingChanged, 1u << user_index);
-  return X_E_SUCCESS;
+  const X_KSESSION* session = memory->TranslateVirtual<X_KSESSION*>(obj_ptr);
+  return kernel_state()->object_table()->LookupObject<XSession>(
+      session->handle);
 }
 
 XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
 
-// http://mb.mirage.org/bugzilla/xliveless/main.c
+X_HRESULT XgiApp::ExecuteDispatchMessage(uint32_t message, uint32_t buffer_ptr,
+                                         uint32_t buffer_length,
+                                         uint32_t* extended_error) {
+  const X_HRESULT result =
+      HandleMessage(message, buffer_ptr, buffer_length, extended_error);
 
-X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
-                                      uint32_t buffer_length) {
+  // A request with an XOVERLAPPED reports the failure as its extended error,
+  // e.g. XSessionEnd on a session that hasn't started gives
+  // X_ONLINE_E_SESSION_WRONG_STATE.
+  if (extended_error && !*extended_error && XFAILED(result)) {
+    *extended_error = result;
+  }
+
+  return result;
+}
+
+X_HRESULT XgiApp::HandleMessage(uint32_t message, uint32_t buffer_ptr,
+                                uint32_t buffer_length,
+                                uint32_t* extended_error) {
   // NOTE: buffer_length may be zero or valid.
   auto buffer = memory_->TranslateVirtual(buffer_ptr);
+
   switch (message) {
+    case 0x000B0018: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_MODIFY));
+
+      XGI_SESSION_MODIFY* data = reinterpret_cast<XGI_SESSION_MODIFY*>(buffer);
+
+      XELOGI("XSessionModify({:08X} {:08X} {:08X} {:08X})", data->obj_ptr.get(),
+             data->flags.get(), data->maxPublicSlots.get(),
+             data->maxPrivateSlots.get());
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
+      }
+
+      return session->ModifySession(data);
+    }
+    case 0x000B0016: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_SEARCH));
+      XELOGI("XSessionSearch");
+
+      XGI_SESSION_SEARCH* data = reinterpret_cast<XGI_SESSION_SEARCH*>(buffer);
+
+      const uint32_t num_users = kernel_state()
+                                     ->xam_state()
+                                     ->profile_manager()
+                                     ->SignedInProfilesCount();
+
+      const auto xlast =
+          kernel_state_->emulator()->game_info_database()->GetXLast();
+
+      return XSession::GetSessions(kernel_state_, data, num_users);
+    }
+    case 0x000B001C: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_SEARCH_EX));
+      XELOGI("XSessionSearchEx");
+
+      XGI_SESSION_SEARCH_EX* data =
+          reinterpret_cast<XGI_SESSION_SEARCH_EX*>(buffer);
+
+      return XSession::GetSessions(kernel_state_, &data->session_search,
+                                   data->num_users);
+    }
+    case 0x000B001D: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_DETAILS));
+      XELOGI("XSessionGetDetails({:08X});", buffer_length);
+
+      XGI_SESSION_DETAILS* data =
+          reinterpret_cast<XGI_SESSION_DETAILS*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
+      }
+
+      return session->GetSessionDetails(data);
+    }
+    case 0x000B001E: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_MIGRATE));
+      XELOGI("XSessionMigrateHost");
+
+      XGI_SESSION_MIGRATE* data =
+          reinterpret_cast<XGI_SESSION_MIGRATE*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
+      }
+
+      XSESSION_INFO* session_info_ptr =
+          memory_->TranslateVirtual<XSESSION_INFO*>(data->session_info_ptr);
+
+      if (!data->session_info_ptr) {
+        XELOGI("Session Migration Failed");
+        return X_E_FAIL;
+      }
+
+      return session->MigrateHost(data);
+    }
+    case 0x000B0021: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_XUSER_READ_STATS));
+      XELOGI("XUserReadStats");
+
+      XGI_XUSER_READ_STATS* data =
+          reinterpret_cast<XGI_XUSER_READ_STATS*>(buffer);
+
+      if (!data->xuids_count || data->xuids_count > X_STATS_MAX_USER_COUNT) {
+        return X_E_INVALIDARG;
+      }
+
+      if (!data->xuids_ptr) {
+        return X_E_INVALIDARG;
+      }
+
+      if (!data->specs_ptr) {
+        return X_E_INVALIDARG;
+      }
+
+      // 545107D4 specs_count = xuids_count
+      if (!data->specs_count || data->specs_count > XUserMaxReadStatsSpec) {
+        return X_E_INVALIDARG;
+      }
+
+      if (!data->results_ptr) {
+        return X_E_INVALIDARG;
+      }
+
+      // 4D53082D
+      if (!kernel_state()->xam_state()->user_tracker()->LoggedInToLive()) {
+        return X_ONLINE_E_LOGON_NOT_LOGGED_ON;
+      }
+
+      // 584107D7 caches results
+      ReadUserStatsObjectJSON read_stats(*data);
+
+      std::unique_ptr<LeaderboardObjectJSON> leaderboards =
+          kernel_state()->GetXboxLiveAPI()->ReadLeaderboards(read_stats);
+
+      if (!leaderboards->WriteResults(data->results_ptr, data->results_size)) {
+        return X_E_INVALIDARG;
+      }
+
+      return X_E_SUCCESS;
+    }
+    case 0x000B001A: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_ARBITRATION));
+
+      XGI_SESSION_ARBITRATION* data =
+          reinterpret_cast<XGI_SESSION_ARBITRATION*>(buffer);
+
+      XELOGI(
+          "XSessionArbitrationRegister({:08X}, {:08X}, {:08X}, {:08X}, {:08X})",
+          data->obj_ptr.get(), data->flags.get(), data->session_nonce.get(),
+          data->results_buffer_size.get(), data->results_ptr.get());
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
+      }
+
+      return session->RegisterArbitration(data);
+    }
     case 0x000B0006: {
       assert_true(!buffer_length ||
                   buffer_length == sizeof(XGI_XUSER_SET_CONTEXT));
       const XGI_XUSER_SET_CONTEXT* xgi_context =
           reinterpret_cast<const XGI_XUSER_SET_CONTEXT*>(buffer);
+
+      const bool is_property =
+          xam::UserData::get_type(xgi_context->context.context_id) !=
+          xam::X_USER_DATA_TYPE::CONTEXT;
+
+      // 555307F0
+      assert_false(is_property);
 
       XELOGD("XGIUserSetContext({:08X}, ID: {:08X}, Value: {:08X})",
              xgi_context->user_index.get(),
@@ -259,7 +313,16 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         kernel_state_->xam_state()->user_tracker()->UpdateContext(
             user->xuid(), xgi_context->context.context_id,
             xgi_context->context.value);
+
+        std::u16string context_desc =
+            kernel_state()->xam_state()->user_tracker()->GetContextDescription(
+                user->xuid(), xgi_context->context.context_id);
+
+        if (!context_desc.empty()) {
+          XELOGD("Set {}", xe::to_utf8(context_desc));
+        }
       }
+
       return X_E_SUCCESS;
     }
     case 0x000B0007: {
@@ -281,6 +344,17 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       }
 
       if (user) {
+        // 4D5307D5 will provide null pointer for unexpected property from
+        // XSessionSearch.
+        if (!xgi_property->data_address) {
+          XELOGI(
+              "XGIUserSetPropertyEx setting property {:08X} without "
+              "data_address!",
+              xgi_property->property_id.get());
+          assert_always();
+          return X_E_SUCCESS;
+        }
+
         Property property(
             xgi_property->property_id,
             Property::get_valid_data_size(xgi_property->property_id,
@@ -289,6 +363,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
         kernel_state_->xam_state()->user_tracker()->AddProperty(user->xuid(),
                                                                 &property);
+
+        std::u16string property_desc =
+            kernel_state_->xam_state()->user_tracker()->GetPropertyDescription(
+                xgi_property->property_id);
+
+        if (!property_desc.empty()) {
+          XELOGD("Set {}", xe::to_utf8(property_desc));
+        }
       }
       return X_E_SUCCESS;
     }
@@ -318,156 +400,219 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       return X_E_SUCCESS;
     }
     case 0x000B0010: {
-      XELOGD("XSessionCreate({:08X}, {:08X})", buffer_ptr, buffer_length);
-      assert_true(!buffer_length || buffer_length == 28);
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_CREATE));
+      XELOGI("XSessionCreate({:08X}, {:08X})", buffer_ptr, buffer_length);
       // Sequence:
       // - XamSessionCreateHandle
       // - XamSessionRefObjByHandle
       // - [this]
       // - CloseHandle
-      uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
-      uint32_t flags = xe::load_and_swap<uint32_t>(buffer + 0x4);
-      uint32_t num_slots_public = xe::load_and_swap<uint32_t>(buffer + 0x8);
-      uint32_t num_slots_private = xe::load_and_swap<uint32_t>(buffer + 0xC);
-      uint32_t user_index = xe::load_and_swap<uint32_t>(buffer + 0x10);
-      uint32_t session_info_ptr = xe::load_and_swap<uint32_t>(buffer + 0x14);
-      uint32_t nonce_ptr = xe::load_and_swap<uint32_t>(buffer + 0x18);
 
-      XELOGD(
-          "XGISessionCreateImpl({:08X}, {:08X}, {}, {}, {:08X}, {:08X}, "
-          "{:08X})",
-          session_ptr, flags, num_slots_public, num_slots_private, user_index,
-          session_info_ptr, nonce_ptr);
+      XGI_SESSION_CREATE* data = reinterpret_cast<XGI_SESSION_CREATE*>(buffer);
 
-      // 584107FB expects offline session creation using flags 0 to succeed
-      // while offline.
-      // 58410889 expects stats session creation failure while offline.
-      //
-      // Presence, stats and matchmaking need the creating user signed in to
-      // Live.
-      constexpr uint32_t kLiveFlags = SessionFlags::PRESENCE |
-                                      SessionFlags::STATS |
-                                      SessionFlags::MATCHMAKING;
-      const UserProfile* user =
-          kernel_state_->xam_state()->GetUserProfile(user_index);
-      const bool live =
-          user && user->signin_state() ==
-                      static_cast<uint32_t>(SignInState::SignedInToLive);
-      if (flags & kLiveFlags && !live) {
-        return 0x80155209;  // X_ONLINE_E_SESSION_NOT_LOGGED_ON
-      }
-      // Arbitrated peer networking needs the multiplayer privilege, which only
-      // Live users hold.
-      if (flags & SessionFlags::PEER_NETWORK &&
-          flags & SessionFlags::ARBITRATION && !live) {
-        return 0x80155201;  // X_ONLINE_E_SESSION_INSUFFICIENT_PRIVILEGES
-      }
-
-      auto session = XSession::FromGuest(kernel_state_, session_ptr);
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
       if (!session) {
         return X_E_INVALIDARG;
       }
-      return session->Create(flags, user_index, num_slots_public,
-                             num_slots_private, session_info_ptr, nonce_ptr);
+
+      const auto result = session->CreateSession(
+          data->user_index, data->num_slots_public, data->num_slots_private,
+          data->flags, data->session_info_ptr, data->nonce_ptr);
+
+      kernel_state()->GetXboxLiveAPI()->clearXnaddrCache();
+      return result;
     }
     case 0x000B0011: {
-      XELOGD("XGISessionDelete({:08X}, {:08X})", buffer_ptr, buffer_length);
-      auto session = XSession::FromGuest(kernel_state_,
-                                         xe::load_and_swap<uint32_t>(buffer));
+      assert_true(!buffer_length || buffer_length == sizeof(XGI_SESSION_STATE));
+      XELOGI("XGISessionDelete");
+
+      XGI_SESSION_STATE* data = reinterpret_cast<XGI_SESSION_STATE*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
       if (!session) {
         return X_E_INVALIDARG;
       }
-      return session->DeleteSession();
+
+      const X_RESULT result = session->DeleteSession(data);
+      if (result == X_ERROR_SUCCESS) {
+        session->ReleaseHandle();
+      }
+
+      return result;
     }
     case 0x000B0012: {
-      assert_true(buffer_length == 0x14);
-      uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
-      uint32_t user_count = xe::load_and_swap<uint32_t>(buffer + 0x4);
-      uint32_t xuid_array = xe::load_and_swap<uint32_t>(buffer + 0x8);
-      uint32_t user_index_array = xe::load_and_swap<uint32_t>(buffer + 0xC);
-      uint32_t private_slots_array = xe::load_and_swap<uint32_t>(buffer + 0x10);
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_MANAGE));
+      XELOGI("XSessionJoin");
 
-      // No user indices means remote users join by XUID.
-      XELOGD("XGISessionJoin({:08X}, {}, {:08X}, {:08X}, {:08X})", session_ptr,
-             user_count, xuid_array, user_index_array, private_slots_array);
-      if (auto session = XSession::FromGuest(kernel_state_, session_ptr)) {
-        session->Join(user_count, xuid_array, user_index_array,
-                      private_slots_array);
+      XGI_SESSION_MANAGE* data = reinterpret_cast<XGI_SESSION_MANAGE*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
       }
-      return X_E_SUCCESS;
+
+      const auto result = session->JoinSession(data);
+      kernel_state()->GetXboxLiveAPI()->clearXnaddrCache();
+      return result;
     }
     case 0x000B0013: {
-      assert_true(buffer_length == 0x14);
-      uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
-      uint32_t count = xe::load_and_swap<uint32_t>(buffer + 0x4);
-      uint32_t xuid_array = xe::load_and_swap<uint32_t>(buffer + 0x8);
-      uint32_t user_index_array = xe::load_and_swap<uint32_t>(buffer + 0xC);
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_MANAGE));
+      XELOGI("XSessionLeave");
 
-      // No user indices means remote users leave by XUID.
-      XELOGD("XGISessionLeave({:08X}, {}, {:08X}, {:08X})", session_ptr, count,
-             xuid_array, user_index_array);
-      if (auto session = XSession::FromGuest(kernel_state_, session_ptr)) {
-        session->Leave(count, xuid_array, user_index_array);
+      const auto data = reinterpret_cast<XGI_SESSION_MANAGE*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
       }
-      return X_E_SUCCESS;
+
+      const auto result = session->LeaveSession(data);
+      kernel_state()->GetXboxLiveAPI()->clearXnaddrCache();
+
+      return result;
     }
     case 0x000B0014: {
-      XELOGD("XSessionStart({:08X})", buffer_ptr);
-      if (auto session = XSession::FromGuest(
-              kernel_state_, xe::load_and_swap<uint32_t>(buffer))) {
-        session->Start();
+      // Gets 584107FB in game.
+      // get high score table?
+      assert_true(!buffer_length || buffer_length == sizeof(XGI_SESSION_STATE));
+      XELOGI("XSessionStart");
+
+      XGI_SESSION_STATE* data = reinterpret_cast<XGI_SESSION_STATE*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
       }
-      return X_STATUS_SUCCESS;
+
+      return session->StartSession(data);
     }
     case 0x000B0015: {
-      XELOGD("XSessionEnd({:08X}, {:08X})", buffer_ptr, buffer_length);
-      if (auto session = XSession::FromGuest(
-              kernel_state_, xe::load_and_swap<uint32_t>(buffer))) {
-        session->End();
-      }
-      return X_STATUS_SUCCESS;
-    }
-    case 0x000B0018: {
-      assert_true(!buffer_length || buffer_length == 0x10);
-      uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
-      uint32_t flags = xe::load_and_swap<uint32_t>(buffer + 0x4);
-      uint32_t max_public_slots = xe::load_and_swap<uint32_t>(buffer + 0x8);
-      uint32_t max_private_slots = xe::load_and_swap<uint32_t>(buffer + 0xC);
-      XELOGD("XSessionModify({:08X}, {:08X}, {}, {})", session_ptr, flags,
-             max_public_slots, max_private_slots);
-      auto session = XSession::FromGuest(kernel_state_, session_ptr);
+      // send high scores?
+      assert_true(!buffer_length || buffer_length == sizeof(XGI_SESSION_STATE));
+      XELOGI("XSessionEnd");
+
+      XGI_SESSION_STATE* data = reinterpret_cast<XGI_SESSION_STATE*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
       if (!session) {
         return X_E_INVALIDARG;
       }
-      return session->Modify(flags, max_public_slots, max_private_slots);
+
+      return session->EndSession(data);
     }
-    case 0x000B001D: {
-      assert_true(!buffer_length || buffer_length == 0x18);
-      uint32_t session_ptr = xe::load_and_swap<uint32_t>(buffer + 0x0);
-      uint32_t size_ptr = xe::load_and_swap<uint32_t>(buffer + 0x4);
-      uint32_t details_ptr = xe::load_and_swap<uint32_t>(buffer + 0x8);
-      XELOGD("XSessionGetDetails({:08X}, {:08X}, {:08X})", session_ptr,
-             size_ptr, details_ptr);
-      auto session = XSession::FromGuest(kernel_state_, session_ptr);
+    case 0x000B0025: {
+      assert_true(!buffer_length || buffer_length == sizeof(XGI_STATS_WRITE));
+
+      XGI_STATS_WRITE* data = reinterpret_cast<XGI_STATS_WRITE*>(buffer);
+
+      XELOGI("XSessionWriteStats({:08X}, {:016X}, {:08X}, {:08X})",
+             data->obj_ptr.get(), data->xuid.get(), data->num_views.get(),
+             data->views_ptr.get());
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
       if (!session) {
         return X_E_INVALIDARG;
       }
-      return session->GetDetails(size_ptr, details_ptr);
+
+      return session->WriteStats(data);
     }
-    case 0x000B0021: {
-      XELOGD("XUserReadStats");
+    case 0x000B001B: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_SEARCH_BYID));
+      XELOGI("XSessionSearchByID");
 
-      struct XUserReadStats {
-        xe::be<uint32_t> titleId;
-        xe::be<uint32_t> xuids_count;
-        xe::be<uint32_t> xuids_guest_address;
-        xe::be<uint32_t> specs_count;
-        xe::be<uint32_t> specs_guest_address;
-        xe::be<uint32_t> results_size;
-        xe::be<uint32_t> results_guest_address;
-      }* data = reinterpret_cast<XUserReadStats*>(buffer);
+      XGI_SESSION_SEARCH_BYID* data =
+          reinterpret_cast<XGI_SESSION_SEARCH_BYID*>(buffer);
 
-      return 0x80151802;  // X_ONLINE_E_LOGON_NOT_LOGGED_ON
+      return XSession::GetSessionByID(kernel_state_, data);
+    }
+    case 0x000B0060: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_SEARCH_BYIDS));
+      XELOGI("XSessionSearchByIds");
+
+      XGI_SESSION_SEARCH_BYIDS* data =
+          reinterpret_cast<XGI_SESSION_SEARCH_BYIDS*>(buffer);
+
+      const X_RESULT result = XSession::GetSessionByIDs(kernel_state_, data);
+
+      SEARCH_RESULTS* search_results =
+          memory_->TranslateVirtual<SEARCH_RESULTS*>(data->search_results_ptr);
+
+      XELOGI("XSessionSearchByIds found {} session(s).",
+             search_results->header.search_results_count.get());
+
+      return result;
+    }
+    case 0x000B0065: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_SEARCH_WEIGHTED));
+      XELOGI("XSessionSearchWeighted");
+
+      XGI_SESSION_SEARCH_WEIGHTED* data =
+          reinterpret_cast<XGI_SESSION_SEARCH_WEIGHTED*>(buffer);
+
+      const uint32_t num_users = kernel_state()
+                                     ->xam_state()
+                                     ->profile_manager()
+                                     ->SignedInProfilesCount();
+
+      return XSession::GetWeightedSessions(kernel_state_, data, num_users);
+    }
+    case 0x000B0026: {
+      // 4D5307EA
+      assert_true(!buffer_length || buffer_length == sizeof(XGI_STATS_WRITE));
+
+      XGI_STATS_WRITE* data = reinterpret_cast<XGI_STATS_WRITE*>(buffer);
+
+      XELOGI("XSessionFlushStats({:08X}, {:016X}, {:08X}, {:08X})",
+             data->obj_ptr.get(), data->xuid.get(), data->num_views.get(),
+             data->views_ptr.get());
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
+      }
+
+      return session->FlushStats();
+    }
+    case 0x000B001F: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_MODIFYSKILL));
+      XELOGI("XSessionModifySkill");
+
+      XGI_SESSION_MODIFYSKILL* data =
+          reinterpret_cast<XGI_SESSION_MODIFYSKILL*>(buffer);
+
+      const auto session = LookupSessionObject(memory_, data->obj_ptr);
+      if (!session) {
+        return X_E_INVALIDARG;
+      }
+
+      return session->ModifySkill(data);
+    }
+    case 0x000B0020: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_XUSER_STATS_RESET));
+      // 545107D4
+      XELOGI("XUserResetStatsView");
+
+      XGI_XUSER_STATS_RESET* data =
+          reinterpret_cast<XGI_XUSER_STATS_RESET*>(buffer);
+
+      return X_E_SUCCESS;
+    }
+    case 0x000B0019: {
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XGI_SESSION_INVITE));
+      XELOGI("XSessionGetInvitationData unimplemented");
+
+      XGI_SESSION_INVITE* data = reinterpret_cast<XGI_SESSION_INVITE*>(buffer);
+
+      return X_E_SUCCESS;
     }
     case 0x000B0036: {
       // Called after opening xbox live arcade and clicking on xbox live v5759
@@ -477,43 +622,27 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XELOGD("XInvalidateGamerTileCache, unimplemented");
       return X_E_FAIL;
     }
-    case 0x000B003C: {
-      if (buffer_length != sizeof(XGI_TITLE_INFO_FROM_SPA)) {
-        return X_E_INVALIDARG;
-      }
-      const auto* args = reinterpret_cast<XGI_TITLE_INFO_FROM_SPA*>(buffer);
-      if (!args->spa_address || !args->name_address ||
-          !args->icon_size_address || !args->icon_address) {
-        return X_E_INVALIDARG;
-      }
-      SpaInfo spa(std::span<uint8_t>(
-          memory_->TranslateVirtual<uint8_t*>(args->spa_address),
-          args->spa_size));
-      spa.Load();
-      const XLanguage language = spa.GetExistingLanguage(static_cast<XLanguage>(
-          kernel_state_->xconfig()->ReadSetting<uint32_t>(
-              XCONFIG_USER_CATEGORY, XCONFIG_USER_LANGUAGE)));
-      string_util::copy_and_swap_truncating(
-          memory_->TranslateVirtual<char16_t*>(args->name_address),
-          xe::to_utf16(spa.title_name(language)), args->name_length);
-      const std::span<const uint8_t> icon = spa.title_icon();
-      auto* icon_size =
-          memory_->TranslateVirtual<xe::be<uint32_t>*>(args->icon_size_address);
-      const bool fits = icon.size() <= *icon_size;
-      *icon_size = static_cast<uint32_t>(icon.size());
-      if (!fits) {
-        return X_E_INSUFFICIENT_BUFFER;
-      }
-      std::memcpy(memory_->TranslateVirtual(args->icon_address), icon.data(),
-                  icon.size());
-      return X_E_SUCCESS;
-    }
     case 0x000B003D: {
+      assert_true(!buffer_length || buffer_length == sizeof(XGI_XUSER_ANID));
+
       // Used in 5451082A, 5553081E
       // XUserGetCachedANID
-      XELOGI("XUserGetANID({:08X}, {:08X}), implemented in netplay", buffer_ptr,
-             buffer_length);
-      return X_E_FAIL;
+      XELOGI("XUserGetANID");
+      XGI_XUSER_ANID* data = reinterpret_cast<XGI_XUSER_ANID*>(buffer);
+
+      if (!kernel_state()->xam_state()->IsUserSignedIn(data->user_index)) {
+        return X_ERROR_NOT_LOGGED_ON;
+      }
+
+      uint8_t* AnIdBuffer =
+          memory_->TranslateVirtual<uint8_t*>(data->AnId_buffer_ptr);
+
+      // Game calls HexDecodeDigit on AnIdBuffer
+      for (uint32_t i = 0; i < data->AnId_buffer_size - 1; i++) {
+        AnIdBuffer[i] = i % 16;
+      }
+
+      return X_E_SUCCESS;
     }
     case 0x000B0041: {
       assert_true(!buffer_length ||
@@ -600,31 +729,6 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       }
 
       return X_E_SUCCESS;
-    }
-    case 0x000B0082: {
-      assert_true(!buffer_length ||
-                  buffer_length == sizeof(XGI_USER_PREFERENCE));
-      const auto* request =
-          reinterpret_cast<const XGI_USER_PREFERENCE*>(buffer);
-      if (!request->value) {
-        return X_E_INVALIDARG;
-      }
-      uint32_t value = 0;
-      const X_HRESULT result =
-          ReadUserPreference(request->user_index, request->preference, value);
-      if (XSUCCEEDED(result)) {
-        xe::store_and_swap<uint32_t>(memory_->TranslateVirtual(request->value),
-                                     value);
-      }
-      return result;
-    }
-    case 0x000B0083: {
-      assert_true(!buffer_length ||
-                  buffer_length == sizeof(XGI_USER_PREFERENCE));
-      const auto* request =
-          reinterpret_cast<const XGI_USER_PREFERENCE*>(buffer);
-      return WriteUserPreference(request->user_index, request->preference,
-                                 request->value);
     }
   }
   XELOGE(

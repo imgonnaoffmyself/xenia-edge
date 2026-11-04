@@ -76,6 +76,9 @@
 [submodule "third_party/pugixml"]
 	path = third_party/pugixml
 	url = https://github.com/zeux/pugixml.git
+[submodule "third_party/libcurl"]
+	path = third_party/libcurl
+	url = https://github.com/curl/curl.git
 [submodule "third_party/libusb"]
 	path = third_party/libusb
 	url = https://github.com/libusb/libusb.git
@@ -110,6 +113,9 @@
 	path = third_party/SPIRV-Cross
 	url = https://github.com/KhronosGroup/SPIRV-Cross.git
 	branch = vulkan-sdk-1.4.341
+[submodule "third_party/wolfssl"]
+	path = third_party/wolfssl
+	url = https://github.com/wolfssl/wolfssl.git
 [submodule "third_party/wxWidgets"]
 	path = third_party/wxWidgets
 	url = https://github.com/wxWidgets/wxWidgets.git
@@ -134,3 +140,6 @@
 [submodule "third_party/mbedtls"]
 	path = third_party/mbedtls
 	url = https://github.com/Mbed-TLS/mbedtls.git
+[submodule "third_party/miniupnp"]
+	path = third_party/miniupnp
+	url = https://github.com/miniupnp/miniupnp.git

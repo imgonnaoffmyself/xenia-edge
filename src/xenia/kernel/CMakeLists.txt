@@ -19,6 +19,7 @@ endif()
 target_link_libraries(xenia-kernel PUBLIC
   asio fmt mbedtls zlib-ng pugixml xenia-apu xenia-base xenia-cpu
   xenia-hid xenia-net xenia-vfs
+  curl
 )
 if(WIN32)
   target_link_libraries(xenia-kernel PUBLIC winhttp)
