@@ -90,6 +90,9 @@ class EmulatorWindow {
 
   void OnEmulatorInitialized();
 
+  // Toggles the Netplay Settings dialog (xenia-webservices online play config).
+  void ToggleNetplaySettingsDialog();
+
   // Starts a new xenia process continuing this session with |args|, then
   // |target| (UTF-8, empty for the game list). Returns whether it started.
   bool SpawnEmulatorProcess(const std::vector<std::string>& args,
