@@ -43,6 +43,12 @@ class NetplaySettingsDialog final : public ui::ImGuiDialog {
   bool xstorage_backend_ = false;
   bool xstorage_user_data_backend_ = false;
   bool initialized_ = false;
+
+  // Async web service call results
+  std::string find_player_result_;
+  std::string session_list_result_;
+  std::string session_details_result_;
+  std::string delete_session_result_;
 };
 
 }  // namespace app

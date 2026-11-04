@@ -286,7 +286,16 @@ bool XLiveAPI::Del(const std::string endpoint, response_data* chunk,
   return CurlRequest(curl_handle, "DELETE", endpoint, "", chunk, timeout);
 }
 
-std::string XLiveAPI::OnlineIP_str() const { return ip_to_string(online_ip_); }
+void XLiveAPI::WaitForWhoami() {
+  if (whoami_result_.valid()) {
+    online_ip_ = whoami_result_.get();
+  }
+}
+
+std::string XLiveAPI::OnlineIP_str() {
+  WaitForWhoami();
+  return ip_to_string(online_ip_);
+}
 
 sockaddr_in XLiveAPI::whoami(const std::string& endpoint) {
   sockaddr_in addr = {};

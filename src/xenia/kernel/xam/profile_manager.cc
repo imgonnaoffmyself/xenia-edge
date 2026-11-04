@@ -18,6 +18,7 @@
 #include "xenia/config.h"
 #include "xenia/emulator.h"
 #include "xenia/hid/input_system.h"
+#include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/crypto_utils.h"
 #include "xenia/kernel/xam/xam_state.h"
@@ -28,6 +29,8 @@ DEFINE_string(logged_profile_slot_0_xuid, "",
               "XUID of the profile to load on boot in slot 0", "Profiles");
 DEFINE_string(logged_profile_slot_1_xuid, "",
               "XUID of the profile to load on boot in slot 1", "Profiles");
+
+DECLARE_int32(network_mode);
 DEFINE_string(logged_profile_slot_2_xuid, "",
               "XUID of the profile to load on boot in slot 2", "Profiles");
 DEFINE_string(logged_profile_slot_3_xuid, "",
@@ -394,6 +397,14 @@ void ProfileManager::Login(const uint64_t xuid, const uint8_t user_index,
       std::make_unique<UserProfile>(xuid, &profile);
 
   user_tracker_->AddUser(xuid);
+
+  // Register the player with the xenia-webservices online play backend when
+  // signing in to Live.
+  if (profile.IsLiveEnabled() && cvars::network_mode == 2) {
+    if (auto* xbl_api = kernel_state_->GetXboxLiveAPI()) {
+      xbl_api->RegisterPlayer(xuid);
+    }
+  }
 
   if (notify) {
     kernel_state_->BroadcastNotification(kXNotificationSystemSignInChanged,

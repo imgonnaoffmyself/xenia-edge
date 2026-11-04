@@ -8,6 +8,7 @@
 #include "xenia/base/string_util.h"
 #include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/util/net_utils.h"
 #include "xenia/kernel/util/shim_utils.h"
 
 DECLARE_string(api_address);
@@ -33,9 +34,48 @@ namespace {
 constexpr int kApiAddressBufSize = 256;
 constexpr int kFriendsXuidsBufSize = 256;
 constexpr int kNetworkInterfaceBufSize = 64;
+constexpr int kFindPlayerIpBufSize = 64;
 
 const char* kNetworkModes[] = {"Offline", "Systemlink", "Xbox Live"};
 constexpr int kNetworkModeCount = 3;
+
+// Minimal JSON value extraction: finds "key":"value" or "key":number and
+// returns the value string. Returns false if not found.
+bool JsonGetString(const std::string& json, const std::string& key,
+                   std::string* out) {
+  std::string search = "\"" + key + "\":\"";
+  size_t pos = json.find(search);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  size_t start = pos + search.size();
+  size_t end = json.find('"', start);
+  if (end == std::string::npos) {
+    return false;
+  }
+  *out = json.substr(start, end - start);
+  return true;
+}
+
+bool JsonGetNumber(const std::string& json, const std::string& key,
+                   int64_t* out) {
+  std::string search = "\"" + key + "\":";
+  size_t pos = json.find(search);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  size_t start = pos + search.size();
+  size_t end = json.find_first_of(",} \n", start);
+  if (end == std::string::npos) {
+    end = json.size();
+  }
+  try {
+    *out = std::stoll(json.substr(start, end - start));
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
 
 }  // namespace
 
@@ -203,10 +243,142 @@ void NetplaySettingsDialog::OnDraw(ImGuiIO& io) {
 
   // XStorage user data backend
   ImGui::Spacing();
-  ImGui::Checkbox("XStorage User Data Backend", &xstorage_user_data_backend_);
+  ImGui::Checkbox("XStorage User Data Backend",
+                  &xstorage_user_data_backend_);
   cvars::xstorage_user_data_backend = xstorage_user_data_backend_;
   ImGui::SameLine();
   ImGui::TextDisabled("Store user data on backend (not recommended).");
+
+  ImGui::Spacing();
+  ImGui::Separator();
+
+  // Online status
+  ImGui::Text("Online Status");
+  ImGui::SameLine();
+  if (xbl_api) {
+    bool connected = xbl_api->IsConnectedToServer();
+    ImGui::TextColored(connected ? ImVec4(0, 1, 0, 1) : ImVec4(1, 0, 0, 1),
+                       connected ? "Connected to server" : "Not connected");
+  } else {
+    ImGui::TextColored(ImVec4(1, 0, 0, 1), "XLiveAPI not available");
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+
+  // --- Session browse / join / find player ---
+  ImGui::Text("Session Management");
+  ImGui::Separator();
+
+  // Online IP (resolved via whoami)
+  if (xbl_api) {
+    std::string online_ip = xbl_api->OnlineIP_str();
+    ImGui::Text("Online IP: %s", online_ip.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(resolved via whoami)");
+  }
+
+  // Find Player by IP
+  ImGui::Spacing();
+  ImGui::Text("Find Player");
+  ImGui::SetNextItemWidth(200.0f);
+  static char find_player_ip_buf[kFindPlayerIpBufSize] = {};
+  ImGui::InputText("##find_player_ip", find_player_ip_buf, kFindPlayerIpBufSize);
+  ImGui::SameLine();
+  if (ImGui::Button("Find Player")) {
+    if (xbl_api && strlen(find_player_ip_buf) > 0) {
+      auto result = xbl_api->FindPlayer(find_player_ip_buf);
+      find_player_result_.clear();
+      if (result.response && result.size > 0) {
+        find_player_result_.assign(result.response, result.size);
+      } else {
+        find_player_result_ = "No player found or request failed.";
+      }
+      free(result.response);
+    }
+  }
+  if (!find_player_result_.empty()) {
+    ImGui::TextWrapped("Result: %s", find_player_result_.c_str());
+  }
+
+  // Browse Sessions
+  ImGui::Spacing();
+  if (ImGui::Button("Browse Sessions")) {
+    if (xbl_api) {
+      uint32_t title_id = xe::kernel::kernel_state()->title_id();
+      auto result = xbl_api->GetTitleSessions(title_id);
+      session_list_result_.clear();
+      if (result.response && result.size > 0) {
+        session_list_result_.assign(result.response, result.size);
+      } else {
+        session_list_result_ = "No sessions found or request failed.";
+      }
+      free(result.response);
+    }
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("Search for active sessions on the web service");
+
+  if (!session_list_result_.empty()) {
+    ImGui::TextWrapped("Sessions: %s", session_list_result_.c_str());
+  }
+
+  // Session Details
+  ImGui::Spacing();
+  ImGui::Text("Session Details");
+  static char session_id_buf[32] = {};
+  ImGui::SetNextItemWidth(200.0f);
+  ImGui::InputText("##session_id", session_id_buf, IM_ARRAYSIZE(session_id_buf));
+  ImGui::SameLine();
+  if (ImGui::Button("Get Details")) {
+    if (xbl_api && strlen(session_id_buf) > 0) {
+      uint64_t session_id = 0;
+      try {
+        session_id = std::stoull(session_id_buf);
+      } catch (...) {
+        session_details_result_ = "Invalid session ID.";
+        goto skip_details;
+      }
+      auto result = xbl_api->SessionDetails(session_id);
+      session_details_result_.clear();
+      if (result.response && result.size > 0) {
+        session_details_result_.assign(result.response, result.size);
+      } else {
+        session_details_result_ = "Session not found or request failed.";
+      }
+      free(result.response);
+    skip_details:;
+    }
+  }
+  if (!session_details_result_.empty()) {
+    ImGui::TextWrapped("Details: %s", session_details_result_.c_str());
+  }
+
+  // Delete Session
+  ImGui::Spacing();
+  static char delete_session_id_buf[32] = {};
+  ImGui::SetNextItemWidth(200.0f);
+  ImGui::InputText("##delete_session_id", delete_session_id_buf,
+                   IM_ARRAYSIZE(delete_session_id_buf));
+  ImGui::SameLine();
+  if (ImGui::Button("Delete Session")) {
+    if (xbl_api && strlen(delete_session_id_buf) > 0) {
+      uint64_t session_id = 0;
+      try {
+        session_id = std::stoull(delete_session_id_buf);
+      } catch (...) {
+        delete_session_result_ = "Invalid session ID.";
+        goto skip_delete;
+      }
+      bool ok = xbl_api->DeleteSession(session_id);
+      delete_session_result_ =
+          ok ? "Session deleted successfully." : "Failed to delete session.";
+    skip_delete:;
+    }
+  }
+  if (!delete_session_result_.empty()) {
+    ImGui::TextWrapped("%s", delete_session_result_.c_str());
+  }
 
   ImGui::Spacing();
   ImGui::Separator();

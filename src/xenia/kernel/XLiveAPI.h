@@ -52,9 +52,10 @@ class XLiveAPI {
 
   // whoami / online IP
   static sockaddr_in whoami(const std::string& endpoint);
-  std::string OnlineIP_str() const;
+  std::string OnlineIP_str();  // Blocks until whoami completes if not yet done
   sockaddr_in OnlineIP() const { return online_ip_; }
   void StartWhoamiAsync();
+  void WaitForWhoami();
 
   // Player management
   bool RegisterPlayer(const uint64_t xuid);
