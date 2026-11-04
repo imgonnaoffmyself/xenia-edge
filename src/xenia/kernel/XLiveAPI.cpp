@@ -23,6 +23,7 @@
 #include "xenia/emulator.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/net_utils.h"
+#include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_error.h"
 
 DEFINE_string(api_address, "", "Xenia Web Services API address", "Live");
@@ -89,7 +90,7 @@ bool CurlRequest(CURL* curl_handle, const std::string& method,
     return false;
   }
 
-  XELOGNET("XLiveAPI:{}: Endpoint: {}", method, endpoint);
+  XELOGI("XLiveAPI:{}: Endpoint: {}", method, endpoint);
 
   curl_slist* headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");

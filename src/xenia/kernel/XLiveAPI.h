@@ -32,7 +32,7 @@ class XLiveAPI {
   bool SelectNetworkMode(uint32_t mode);
   void SetXHttp(bool state) const;
 
-  std::string GetApiAddress();
+  static std::string GetApiAddress();
   static std::string BuildEndpoint(std::string endpoint);
 
   void AddAPIAddress(std::string address) const;
