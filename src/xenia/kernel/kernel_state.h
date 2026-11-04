@@ -22,7 +22,6 @@
 #include "xenia/base/bit_map.h"
 #include "xenia/cpu/backend/backend.h"
 #include "xenia/cpu/export_resolver.h"
-#include "xenia/kernel/XLiveAPI.h"
 #include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel.h"
 #include "xenia/kernel/nui.h"
@@ -43,6 +42,7 @@ class Processor;
 }  // namespace cpu
 namespace kernel {
 class SystemManagementController;
+class XLiveAPI;
 namespace xam {
 class AchievementManager;
 class AppManager;

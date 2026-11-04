@@ -193,11 +193,6 @@ add_compile_definitions($<$<NOT:$<CONFIG:Checked>>:IMGUI_USE_STB_SPRINTF>)
 # ==============================================================================
 
 if(MSVC)
-  # WIN32_LEAN_AND_MEAN prevents windows.h from pulling in legacy winsock.h,
-  # which conflicts with winsock2.h (needed by libcurl/XLiveAPI). Must be
-  # defined before any Windows header is included, including wxWidgets headers.
-  add_compile_definitions(WIN32_LEAN_AND_MEAN)
-
   # CRT runtime selection via CMP0091. Debug and Release use the release
   # CRT (/MD); Checked uses the debug CRT (/MDd) because it pairs /RTCsu
   # with ASan.
